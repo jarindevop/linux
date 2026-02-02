@@ -606,8 +606,8 @@ static void npc_set_features(struct rvu *rvu, int blkaddr, u8 intf)
 		if (!npc_check_field(rvu, blkaddr, NPC_LB, intf))
 			*features &= ~BIT_ULL(NPC_OUTER_VID);
 
-	/* Set SPI flag only if AH/ESP and IPSEC_SPI are in the key */
-	if (npc_check_field(rvu, blkaddr, NPC_IPSEC_SPI, intf) &&
+	/* Allow extracting SPI field from AH and ESP headers at same offset */
+	if (npc_is_field_present(rvu, NPC_IPSEC_SPI, intf) &&
 	    (*features & (BIT_ULL(NPC_IPPROTO_ESP) | BIT_ULL(NPC_IPPROTO_AH))))
 		*features |= BIT_ULL(NPC_IPSEC_SPI);
 
@@ -1452,23 +1452,21 @@ process_flow:
 	 * hence modify pcifunc accordingly.
 	 */
 
-	/* AF installing for a PF/VF */
-	if (!req->hdr.pcifunc)
+	if (!req->hdr.pcifunc) {
+		/* AF installing for a PF/VF */
 		target = req->vf;
-
-	/* PF installing for its VF */
-	if (!from_vf && req->vf && !from_rep_dev) {
+	} else if (!from_vf && req->vf && !from_rep_dev) {
+		/* PF installing for its VF */
 		target = (req->hdr.pcifunc & ~RVU_PFVF_FUNC_MASK) | req->vf;
 		pf_set_vfs_mac = req->default_rule &&
 				(req->features & BIT_ULL(NPC_DMAC));
-	}
-
-	/* Representor device installing for a representee */
-	if (from_rep_dev && req->vf)
+	} else if (from_rep_dev && req->vf) {
+		/* Representor device installing for a representee */
 		target = req->vf;
-	else
+	} else {
 		/* msg received from PF/VF */
 		target = req->hdr.pcifunc;
+	}
 
 	/* ignore chan_mask in case pf func is not AF, revisit later */
 	if (!is_pffunc_af(req->hdr.pcifunc))

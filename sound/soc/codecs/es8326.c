@@ -616,7 +616,7 @@ static int es8326_mute(struct snd_soc_dai *dai, int mute, int direction)
 					0x0F, 0x0F);
 			if (es8326->version > ES8326_VERSION_B) {
 				regmap_update_bits(es8326->regmap, ES8326_VMIDSEL, 0x40, 0x40);
-				regmap_update_bits(es8326->regmap, ES8326_ANA_MICBIAS, 0x70, 0x10);
+				regmap_update_bits(es8326->regmap, ES8326_ANA_MICBIAS, 0x70, 0x30);
 			}
 		}
 	} else {
@@ -631,6 +631,8 @@ static int es8326_mute(struct snd_soc_dai *dai, int mute, int direction)
 			regmap_write(es8326->regmap, ES8326_HPR_OFFSET_INI, offset_r);
 			es8326->calibrated = true;
 		}
+		regmap_update_bits(es8326->regmap, ES8326_CLK_INV, 0xc0, 0x00);
+                regmap_update_bits(es8326->regmap, ES8326_CLK_MUX, 0x80, 0x00);
 		if (direction == SNDRV_PCM_STREAM_PLAYBACK) {
 			regmap_update_bits(es8326->regmap, ES8326_DAC_DSM, 0x01, 0x01);
 			usleep_range(1000, 5000);
@@ -645,7 +647,7 @@ static int es8326_mute(struct snd_soc_dai *dai, int mute, int direction)
 		} else {
 			msleep(300);
 			if (es8326->version > ES8326_VERSION_B) {
-				regmap_update_bits(es8326->regmap, ES8326_ANA_MICBIAS, 0x70, 0x50);
+				regmap_update_bits(es8326->regmap, ES8326_ANA_MICBIAS, 0x70, 0x70);
 				regmap_update_bits(es8326->regmap, ES8326_VMIDSEL, 0x40, 0x00);
 			}
 			regmap_update_bits(es8326->regmap,  ES8326_ADC_MUTE,
@@ -676,6 +678,10 @@ static int es8326_set_bias_level(struct snd_soc_component *codec,
 		regmap_write(es8326->regmap, ES8326_ANA_PDN, 0x00);
 		regmap_update_bits(es8326->regmap,  ES8326_CLK_CTL, 0x20, 0x20);
 		regmap_update_bits(es8326->regmap, ES8326_RESET, 0x02, 0x00);
+		if (es8326->version > ES8326_VERSION_B) {
+			regmap_update_bits(es8326->regmap, ES8326_VMIDSEL, 0x40, 0x40);
+			regmap_update_bits(es8326->regmap, ES8326_ANA_MICBIAS, 0x70, 0x30);
+		}
 		break;
 	case SND_SOC_BIAS_PREPARE:
 		break;
@@ -683,6 +689,12 @@ static int es8326_set_bias_level(struct snd_soc_component *codec,
 		regmap_write(es8326->regmap, ES8326_ANA_PDN, 0x3b);
 		regmap_update_bits(es8326->regmap, ES8326_CLK_CTL, 0x20, 0x00);
 		regmap_write(es8326->regmap, ES8326_SDINOUT1_IO, ES8326_IO_INPUT);
+		if (es8326->version > ES8326_VERSION_B) {
+			regmap_update_bits(es8326->regmap, ES8326_VMIDSEL, 0x40, 0x40);
+			regmap_update_bits(es8326->regmap, ES8326_ANA_MICBIAS, 0x70, 0x10);
+		}
+		regmap_update_bits(es8326->regmap, ES8326_CLK_INV, 0xc0, 0xc0);
+		regmap_update_bits(es8326->regmap, ES8326_CLK_MUX, 0x80, 0x80);
 		break;
 	case SND_SOC_BIAS_OFF:
 		clk_disable_unprepare(es8326->mclk);
@@ -725,7 +737,7 @@ static struct snd_soc_dai_driver es8326_dai = {
 
 static void es8326_enable_micbias(struct snd_soc_component *component)
 {
-	struct snd_soc_dapm_context *dapm = snd_soc_component_get_dapm(component);
+	struct snd_soc_dapm_context *dapm = snd_soc_component_to_dapm(component);
 
 	snd_soc_dapm_mutex_lock(dapm);
 	snd_soc_dapm_force_enable_pin_unlocked(dapm, "MICBIAS1");
@@ -736,7 +748,7 @@ static void es8326_enable_micbias(struct snd_soc_component *component)
 
 static void es8326_disable_micbias(struct snd_soc_component *component)
 {
-	struct snd_soc_dapm_context *dapm = snd_soc_component_get_dapm(component);
+	struct snd_soc_dapm_context *dapm = snd_soc_component_to_dapm(component);
 
 	snd_soc_dapm_mutex_lock(dapm);
 	snd_soc_dapm_disable_pin_unlocked(dapm, "MICBIAS1");
@@ -773,7 +785,10 @@ static void es8326_jack_button_handler(struct work_struct *work)
 	case 0x6f:
 	case 0x4b:
 		/* button volume up */
-		cur_button = SND_JACK_BTN_1;
+		if ((iface == 0x6f) && (es8326->version > ES8326_VERSION_B))
+			cur_button = SND_JACK_BTN_0;
+		else
+			cur_button = SND_JACK_BTN_1;
 		break;
 	case 0x27:
 		/* button volume down */
@@ -797,12 +812,12 @@ static void es8326_jack_button_handler(struct work_struct *work)
 			press_count = 0;
 		}
 		button_to_report = cur_button;
-		queue_delayed_work(system_wq, &es8326->button_press_work,
+		queue_delayed_work(system_dfl_wq, &es8326->button_press_work,
 				   msecs_to_jiffies(35));
 	} else if (prev_button != cur_button) {
 		/* mismatch, detect again */
 		prev_button = cur_button;
-		queue_delayed_work(system_wq, &es8326->button_press_work,
+		queue_delayed_work(system_dfl_wq, &es8326->button_press_work,
 				   msecs_to_jiffies(35));
 	} else {
 		/* released or no pressed */
@@ -896,8 +911,8 @@ static void es8326_jack_detect_handler(struct work_struct *work)
 			regmap_write(es8326->regmap, ES8326_INT_SOURCE,
 					(ES8326_INT_SRC_PIN9 | ES8326_INT_SRC_BUTTON));
 			regmap_write(es8326->regmap, ES8326_SYS_BIAS, 0x1f);
-			regmap_update_bits(es8326->regmap, ES8326_HP_DRIVER_REF, 0x0f, 0x08);
-			queue_delayed_work(system_wq, &es8326->jack_detect_work,
+			regmap_update_bits(es8326->regmap, ES8326_HP_DRIVER_REF, 0x0f, 0x0d);
+			queue_delayed_work(system_dfl_wq, &es8326->jack_detect_work,
 					msecs_to_jiffies(400));
 			es8326->hp = 1;
 			goto exit;
@@ -908,7 +923,7 @@ static void es8326_jack_detect_handler(struct work_struct *work)
 			regmap_write(es8326->regmap, ES8326_INT_SOURCE,
 					(ES8326_INT_SRC_PIN9 | ES8326_INT_SRC_BUTTON));
 			es8326_enable_micbias(es8326->component);
-			queue_delayed_work(system_wq, &es8326->button_press_work, 10);
+			queue_delayed_work(system_dfl_wq, &es8326->button_press_work, 10);
 			goto exit;
 		}
 		if ((iface & ES8326_HPBUTTON_FLAG) == 0x01) {
@@ -943,10 +958,10 @@ static irqreturn_t es8326_irq(int irq, void *dev_id)
 		goto out;
 
 	if (es8326->jack->status & SND_JACK_HEADSET)
-		queue_delayed_work(system_wq, &es8326->jack_detect_work,
+		queue_delayed_work(system_dfl_wq, &es8326->jack_detect_work,
 				   msecs_to_jiffies(10));
 	else
-		queue_delayed_work(system_wq, &es8326->jack_detect_work,
+		queue_delayed_work(system_dfl_wq, &es8326->jack_detect_work,
 				   msecs_to_jiffies(300));
 
 out:
@@ -1008,7 +1023,7 @@ static void es8326_init(struct snd_soc_component *component)
 	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
 
 	regmap_write(es8326->regmap, ES8326_RESET, 0x1f);
-	regmap_write(es8326->regmap, ES8326_VMIDSEL, 0x0E);
+	regmap_write(es8326->regmap, ES8326_VMIDSEL, 0x3E);
 	regmap_write(es8326->regmap, ES8326_ANA_LP, 0xf0);
 	usleep_range(10000, 15000);
 	regmap_write(es8326->regmap, ES8326_HPJACK_TIMER, 0xd9);
@@ -1064,8 +1079,7 @@ static void es8326_init(struct snd_soc_component *component)
 	regmap_update_bits(es8326->regmap, ES8326_HPDET_TYPE, 0x03, 0x00);
 	regmap_write(es8326->regmap, ES8326_INTOUT_IO,
 		     es8326->interrupt_clk);
-	regmap_write(es8326->regmap, ES8326_SDINOUT1_IO,
-		    (ES8326_IO_DMIC_CLK << ES8326_SDINOUT1_SHIFT));
+	regmap_write(es8326->regmap, ES8326_SDINOUT1_IO, ES8326_IO_INPUT);
 	regmap_write(es8326->regmap, ES8326_SDINOUT23_IO, ES8326_IO_INPUT);
 
 	regmap_write(es8326->regmap, ES8326_ANA_PDN, 0x00);
@@ -1082,7 +1096,7 @@ static void es8326_init(struct snd_soc_component *component)
 	regmap_write(es8326->regmap, ES8326_ADC2_SRC, 0x66);
 	es8326_disable_micbias(es8326->component);
 	if (es8326->version > ES8326_VERSION_B) {
-		regmap_update_bits(es8326->regmap, ES8326_ANA_MICBIAS, 0x73, 0x13);
+		regmap_update_bits(es8326->regmap, ES8326_ANA_MICBIAS, 0x73, 0x10);
 		regmap_update_bits(es8326->regmap, ES8326_VMIDSEL, 0x40, 0x40);
 	}
 

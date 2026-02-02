@@ -202,7 +202,7 @@ static void init_shared_classes(void)
 	local_irq_disable();			\
 	__irq_enter();				\
 	lockdep_hardirq_threaded();		\
-	WARN_ON(!in_irq());
+	WARN_ON(!in_hardirq());
 
 #define HARDIRQ_EXIT()				\
 	__irq_exit();				\
@@ -1720,8 +1720,6 @@ static void ww_test_normal(void)
 {
 	int ret;
 
-	WWAI(&t);
-
 	/*
 	 * None of the ww_mutex codepaths should be taken in the 'normal'
 	 * mutex calls. The easiest way to verify this is by using the
@@ -1769,6 +1767,8 @@ static void ww_test_normal(void)
 	WARN_ON(ret);
 	ww_mutex_base_unlock(&o.base);
 	WARN_ON(o.ctx != (void *)~0UL);
+
+	WWAI(&t);
 
 	/* nest_lock */
 	o.ctx = (void *)~0UL;
@@ -2512,7 +2512,7 @@ DEFINE_LOCK_GUARD_0(NOTTHREADED_HARDIRQ,
 	do {
 		local_irq_disable();
 		__irq_enter();
-		WARN_ON(!in_irq());
+		WARN_ON(!in_hardirq());
 	} while(0), HARDIRQ_EXIT())
 DEFINE_LOCK_GUARD_0(SOFTIRQ, SOFTIRQ_ENTER(), SOFTIRQ_EXIT())
 

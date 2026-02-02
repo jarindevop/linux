@@ -21,6 +21,8 @@
 #include "xfs_trans_space.h"
 #include "xfs_attr.h"
 #include "xfs_rtgroup.h"
+#include "xfs_rtrmap_btree.h"
+#include "xfs_rtrefcount_btree.h"
 #include "scrub/scrub.h"
 #include "scrub/common.h"
 #include "scrub/trace.h"
@@ -77,7 +79,7 @@ xchk_metapath_cleanup(
 
 	if (mpath->dp_ilock_flags)
 		xfs_iunlock(mpath->dp, mpath->dp_ilock_flags);
-	kfree(mpath->path);
+	kfree_const(mpath->path);
 }
 
 /* Set up a metadir path scan.  @path must be dynamically allocated. */
@@ -96,13 +98,13 @@ xchk_setup_metapath_scan(
 
 	error = xchk_install_live_inode(sc, ip);
 	if (error) {
-		kfree(path);
+		kfree_const(path);
 		return error;
 	}
 
 	mpath = kzalloc(sizeof(struct xchk_metapath), XCHK_GFP_FLAGS);
 	if (!mpath) {
-		kfree(path);
+		kfree_const(path);
 		return -ENOMEM;
 	}
 
@@ -130,7 +132,7 @@ xchk_setup_metapath_rtdir(
 		return -ENOENT;
 
 	return xchk_setup_metapath_scan(sc, sc->mp->m_metadirip,
-			kasprintf(GFP_KERNEL, "rtgroups"), sc->mp->m_rtdirip);
+			kstrdup_const("rtgroups", GFP_KERNEL), sc->mp->m_rtdirip);
 }
 
 /* Scan a rtgroup inode under the /rtgroups directory. */
@@ -171,23 +173,13 @@ static int
 xchk_setup_metapath_quotadir(
 	struct xfs_scrub	*sc)
 {
-	struct xfs_trans	*tp;
-	struct xfs_inode	*dp = NULL;
-	int			error;
+	struct xfs_quotainfo	*qi = sc->mp->m_quotainfo;
 
-	error = xfs_trans_alloc_empty(sc->mp, &tp);
-	if (error)
-		return error;
+	if (!qi || !qi->qi_dirip)
+		return -ENOENT;
 
-	error = xfs_dqinode_load_parent(tp, &dp);
-	xfs_trans_cancel(tp);
-	if (error)
-		return error;
-
-	error = xchk_setup_metapath_scan(sc, sc->mp->m_metadirip,
-			kasprintf(GFP_KERNEL, "quota"), dp);
-	xfs_irele(dp);
-	return error;
+	return xchk_setup_metapath_scan(sc, sc->mp->m_metadirip,
+			kstrdup_const("quota", GFP_KERNEL), qi->qi_dirip);
 }
 
 /* Scan a quota inode under the /quota directory. */
@@ -196,37 +188,31 @@ xchk_setup_metapath_dqinode(
 	struct xfs_scrub	*sc,
 	xfs_dqtype_t		type)
 {
-	struct xfs_trans	*tp = NULL;
-	struct xfs_inode	*dp = NULL;
+	struct xfs_quotainfo	*qi = sc->mp->m_quotainfo;
 	struct xfs_inode	*ip = NULL;
-	const char		*path;
-	int			error;
 
-	error = xfs_trans_alloc_empty(sc->mp, &tp);
-	if (error)
-		return error;
+	if (!qi)
+		return -ENOENT;
 
-	error = xfs_dqinode_load_parent(tp, &dp);
-	if (error)
-		goto out_cancel;
+	switch (type) {
+	case XFS_DQTYPE_USER:
+		ip = qi->qi_uquotaip;
+		break;
+	case XFS_DQTYPE_GROUP:
+		ip = qi->qi_gquotaip;
+		break;
+	case XFS_DQTYPE_PROJ:
+		ip = qi->qi_pquotaip;
+		break;
+	default:
+		ASSERT(0);
+		return -EINVAL;
+	}
+	if (!ip)
+		return -ENOENT;
 
-	error = xfs_dqinode_load(tp, dp, type, &ip);
-	if (error)
-		goto out_dp;
-
-	xfs_trans_cancel(tp);
-	tp = NULL;
-
-	path = kasprintf(GFP_KERNEL, "%s", xfs_dqinode_path(type));
-	error = xchk_setup_metapath_scan(sc, dp, path, ip);
-
-	xfs_irele(ip);
-out_dp:
-	xfs_irele(dp);
-out_cancel:
-	if (tp)
-		xfs_trans_cancel(tp);
-	return error;
+	return xchk_setup_metapath_scan(sc, qi->qi_dirip,
+			kstrdup_const(xfs_dqinode_path(type), GFP_KERNEL), ip);
 }
 #else
 # define xchk_setup_metapath_quotadir(...)	(-ENOENT)
@@ -262,6 +248,10 @@ xchk_setup_metapath(
 		return xchk_setup_metapath_dqinode(sc, XFS_DQTYPE_GROUP);
 	case XFS_SCRUB_METAPATH_PRJQUOTA:
 		return xchk_setup_metapath_dqinode(sc, XFS_DQTYPE_PROJ);
+	case XFS_SCRUB_METAPATH_RTRMAPBT:
+		return xchk_setup_metapath_rtginode(sc, XFS_RTGI_RMAP);
+	case XFS_SCRUB_METAPATH_RTREFCOUNTBT:
+		return xchk_setup_metapath_rtginode(sc, XFS_RTGI_REFCOUNT);
 	default:
 		return -ENOENT;
 	}
@@ -328,9 +318,7 @@ xchk_metapath(
 		return 0;
 	}
 
-	error = xchk_trans_alloc_empty(sc);
-	if (error)
-		return error;
+	xchk_trans_alloc_empty(sc);
 
 	error = xchk_metapath_ilock_both(mpath);
 	if (error)

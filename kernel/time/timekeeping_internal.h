@@ -30,19 +30,22 @@ static inline void timekeeping_inc_mg_floor_swaps(void)
 
 #endif
 
-static inline u64 clocksource_delta(u64 now, u64 last, u64 mask)
+static inline u64 clocksource_delta(u64 now, u64 last, u64 mask, u64 max_delta)
 {
 	u64 ret = (now - last) & mask;
 
 	/*
-	 * Prevent time going backwards by checking the MSB of mask in
-	 * the result. If set, return 0.
+	 * Prevent time going backwards by checking the result against
+	 * @max_delta. If greater, return 0.
 	 */
-	return ret & ~(mask >> 1) ? 0 : ret;
+	return ret > max_delta ? 0 : ret;
 }
 
 /* Semi public for serialization of non timekeeper VDSO updates. */
 unsigned long timekeeper_lock_irqsave(void);
 void timekeeper_unlock_irqrestore(unsigned long flags);
+
+/* NTP specific interface to access the current seconds value */
+long ktime_get_ntp_seconds(unsigned int id);
 
 #endif /* _TIMEKEEPING_INTERNAL_H */

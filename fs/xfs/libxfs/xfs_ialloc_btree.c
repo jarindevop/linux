@@ -265,17 +265,17 @@ xfs_finobt_init_ptr_from_cur(
 	ptr->s = agi->agi_free_root;
 }
 
-STATIC int64_t
-xfs_inobt_key_diff(
+STATIC int
+xfs_inobt_cmp_key_with_cur(
 	struct xfs_btree_cur		*cur,
 	const union xfs_btree_key	*key)
 {
-	return (int64_t)be32_to_cpu(key->inobt.ir_startino) -
-			  cur->bc_rec.i.ir_startino;
+	return cmp_int(be32_to_cpu(key->inobt.ir_startino),
+		       cur->bc_rec.i.ir_startino);
 }
 
-STATIC int64_t
-xfs_inobt_diff_two_keys(
+STATIC int
+xfs_inobt_cmp_two_keys(
 	struct xfs_btree_cur		*cur,
 	const union xfs_btree_key	*k1,
 	const union xfs_btree_key	*k2,
@@ -283,8 +283,8 @@ xfs_inobt_diff_two_keys(
 {
 	ASSERT(!mask || mask->inobt.ir_startino);
 
-	return (int64_t)be32_to_cpu(k1->inobt.ir_startino) -
-			be32_to_cpu(k2->inobt.ir_startino);
+	return cmp_int(be32_to_cpu(k1->inobt.ir_startino),
+		       be32_to_cpu(k2->inobt.ir_startino));
 }
 
 static xfs_failaddr_t
@@ -430,9 +430,9 @@ const struct xfs_btree_ops xfs_inobt_ops = {
 	.init_high_key_from_rec	= xfs_inobt_init_high_key_from_rec,
 	.init_rec_from_cur	= xfs_inobt_init_rec_from_cur,
 	.init_ptr_from_cur	= xfs_inobt_init_ptr_from_cur,
-	.key_diff		= xfs_inobt_key_diff,
+	.cmp_key_with_cur	= xfs_inobt_cmp_key_with_cur,
 	.buf_ops		= &xfs_inobt_buf_ops,
-	.diff_two_keys		= xfs_inobt_diff_two_keys,
+	.cmp_two_keys		= xfs_inobt_cmp_two_keys,
 	.keys_inorder		= xfs_inobt_keys_inorder,
 	.recs_inorder		= xfs_inobt_recs_inorder,
 	.keys_contiguous	= xfs_inobt_keys_contiguous,
@@ -460,9 +460,9 @@ const struct xfs_btree_ops xfs_finobt_ops = {
 	.init_high_key_from_rec	= xfs_inobt_init_high_key_from_rec,
 	.init_rec_from_cur	= xfs_inobt_init_rec_from_cur,
 	.init_ptr_from_cur	= xfs_finobt_init_ptr_from_cur,
-	.key_diff		= xfs_inobt_key_diff,
+	.cmp_key_with_cur	= xfs_inobt_cmp_key_with_cur,
 	.buf_ops		= &xfs_finobt_buf_ops,
-	.diff_two_keys		= xfs_inobt_diff_two_keys,
+	.cmp_two_keys		= xfs_inobt_cmp_two_keys,
 	.keys_inorder		= xfs_inobt_keys_inorder,
 	.recs_inorder		= xfs_inobt_recs_inorder,
 	.keys_contiguous	= xfs_inobt_keys_contiguous,
@@ -744,6 +744,7 @@ xfs_finobt_count_blocks(
 {
 	struct xfs_buf		*agbp = NULL;
 	struct xfs_btree_cur	*cur;
+	xfs_filblks_t		blocks;
 	int			error;
 
 	error = xfs_ialloc_read_agi(pag, tp, 0, &agbp);
@@ -751,9 +752,10 @@ xfs_finobt_count_blocks(
 		return error;
 
 	cur = xfs_finobt_init_cursor(pag, tp, agbp);
-	error = xfs_btree_count_blocks(cur, tree_blocks);
+	error = xfs_btree_count_blocks(cur, &blocks);
 	xfs_btree_del_cursor(cur, error);
 	xfs_trans_brelse(tp, agbp);
+	*tree_blocks = blocks;
 
 	return error;
 }

@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Converted from tools/testing/selftests/bpf/verifier/sock.c */
 
-#include <linux/bpf.h>
+#include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
-
-#define sizeof_field(TYPE, MEMBER) sizeof((((TYPE *)0)->MEMBER))
-#define offsetofend(TYPE, MEMBER) \
-	(offsetof(TYPE, MEMBER)	+ sizeof_field(TYPE, MEMBER))
 
 struct {
 	__uint(type, BPF_MAP_TYPE_REUSEPORT_SOCKARRAY);
@@ -49,6 +45,13 @@ struct {
 	__type(value, struct val);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
 } sk_storage_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+	__uint(max_entries, 1);
+	__uint(key_size, sizeof(__u32));
+	__uint(value_size, sizeof(__u32));
+} jmp_table SEC(".maps");
 
 SEC("cgroup/skb")
 __description("skb->sk: no NULL check")
@@ -1035,6 +1038,132 @@ __naked void sock_create_read_src_port(void)
 "	:
 	: __imm_const(bpf_sock_src_port, offsetof(struct bpf_sock, src_port))
 	: __clobber_all);
+}
+
+__noinline
+long skb_pull_data2(struct __sk_buff *sk, __u32 len)
+{
+	return bpf_skb_pull_data(sk, len);
+}
+
+__noinline
+long skb_pull_data1(struct __sk_buff *sk, __u32 len)
+{
+	return skb_pull_data2(sk, len);
+}
+
+/* global function calls bpf_skb_pull_data(), which invalidates packet
+ * pointers established before global function call.
+ */
+SEC("tc")
+__failure __msg("invalid mem access")
+int invalidate_pkt_pointers_from_global_func(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	skb_pull_data1(sk, 0);
+	*p = 42; /* this is unsafe */
+	return TCX_PASS;
+}
+
+__noinline
+long xdp_pull_data2(struct xdp_md *x, __u32 len)
+{
+	return bpf_xdp_pull_data(x, len);
+}
+
+__noinline
+long xdp_pull_data1(struct xdp_md *x, __u32 len)
+{
+	return xdp_pull_data2(x, len);
+}
+
+/* global function calls bpf_xdp_pull_data(), which invalidates packet
+ * pointers established before global function call.
+ */
+SEC("xdp")
+__failure __msg("invalid mem access")
+int invalidate_xdp_pkt_pointers_from_global_func(struct xdp_md *x)
+{
+	int *p = (void *)(long)x->data;
+
+	if ((void *)(p + 1) > (void *)(long)x->data_end)
+		return XDP_DROP;
+	xdp_pull_data1(x, 0);
+	*p = 42; /* this is unsafe */
+	return XDP_PASS;
+}
+
+/* XDP packet changing kfunc calls invalidate packet pointers */
+SEC("xdp")
+__failure __msg("invalid mem access")
+int invalidate_xdp_pkt_pointers(struct xdp_md *x)
+{
+	int *p = (void *)(long)x->data;
+
+	if ((void *)(p + 1) > (void *)(long)x->data_end)
+		return XDP_DROP;
+	bpf_xdp_pull_data(x, 0);
+	*p = 42; /* this is unsafe */
+	return XDP_PASS;
+}
+
+__noinline
+int tail_call(struct __sk_buff *sk)
+{
+	bpf_tail_call_static(sk, &jmp_table, 0);
+	return 0;
+}
+
+static __noinline
+int static_tail_call(struct __sk_buff *sk)
+{
+	bpf_tail_call_static(sk, &jmp_table, 0);
+	return 0;
+}
+
+/* Tail calls in sub-programs invalidate packet pointers. */
+SEC("tc")
+__failure __msg("invalid mem access")
+int invalidate_pkt_pointers_by_global_tail_call(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	tail_call(sk);
+	*p = 42; /* this is unsafe */
+	return TCX_PASS;
+}
+
+/* Tail calls in static sub-programs invalidate packet pointers. */
+SEC("tc")
+__failure __msg("invalid mem access")
+int invalidate_pkt_pointers_by_static_tail_call(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	static_tail_call(sk);
+	*p = 42; /* this is unsafe */
+	return TCX_PASS;
+}
+
+/* Direct tail calls do not invalidate packet pointers. */
+SEC("tc")
+__success
+int invalidate_pkt_pointers_by_tail_call(struct __sk_buff *sk)
+{
+	int *p = (void *)(long)sk->data;
+
+	if ((void *)(p + 1) > (void *)(long)sk->data_end)
+		return TCX_DROP;
+	bpf_tail_call_static(sk, &jmp_table, 0);
+	*p = 42; /* this is NOT unsafe: tail calls don't return */
+	return TCX_PASS;
 }
 
 char _license[] SEC("license") = "GPL";

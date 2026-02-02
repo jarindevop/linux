@@ -996,8 +996,8 @@ static unsigned int nmk_i2c_functionality(struct i2c_adapter *adap)
 }
 
 static const struct i2c_algorithm nmk_i2c_algo = {
-	.master_xfer	= nmk_i2c_xfer,
-	.functionality	= nmk_i2c_functionality
+	.xfer = nmk_i2c_xfer,
+	.functionality = nmk_i2c_functionality
 };
 
 static void nmk_i2c_of_probe(struct device_node *np,
@@ -1075,6 +1075,7 @@ static const struct of_device_id nmk_i2c_eyeq_match_table[] = {
 		.compatible = "mobileye,eyeq6h-i2c",
 		.data = (void *)NMK_I2C_EYEQ_FLAG_32B_BUS,
 	},
+	{ /* sentinel */ }
 };
 
 static int nmk_i2c_probe(struct amba_device *adev, const struct amba_id *id)
